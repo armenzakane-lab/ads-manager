@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+  <title>Ads Manager — Client</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/css/app.css">
+</head>
+<body>
+
+<div class="app-shell">
+  <div class="sidebar-overlay" id="sidebarOverlay" onclick="closeSidebar()"></div>
+
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-logo">
+      <div class="logo-icon">📊</div>
+      <div>
+        <div class="logo-text">Ads Manager</div>
+        <div class="logo-sub">Agency Dashboard</div>
+      </div>
+    </div>
+    <div class="sidebar-user">
+      <div class="user-avatar" id="userAvatar">—</div>
+      <div class="user-info">
+        <div class="user-email" id="userEmail">Not connected</div>
+        <div class="user-badge" id="userBadge"></div>
+      </div>
+    </div>
+    <nav class="sidebar-nav">
+      <div class="nav-section-label">Navigation</div>
+      <a href="/" class="nav-item">
+        <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+        Dashboard
+      </a>
+      <a href="/settings" class="nav-item">
+        <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M4.93 4.93a10 10 0 0 0 0 14.14"/></svg>
+        Settings
+      </a>
+    </nav>
+    <div class="nav-section-label" style="padding: 12px 20px 6px;">Clients</div>
+    <div class="sidebar-clients" id="sidebarClients"></div>
+    <div class="sidebar-footer">
+      <button class="btn btn-secondary" style="width:100%;font-size:12px;" onclick="signOut()">Sign Out</button>
+    </div>
+  </aside>
+
+  <div class="main-content">
+    <header class="topbar">
+      <button class="hamburger" onclick="toggleSidebar()">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+          <line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/>
+        </svg>
+      </button>
+      <div class="topbar-title" id="topbarTitle">Client</div>
+      <div class="topbar-actions">
+        <button class="btn btn-icon btn-secondary" onclick="refreshData()" title="Refresh">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+        </button>
+        <button class="btn btn-secondary btn-sm" onclick="openEditClientModal()">Edit Info</button>
+      </div>
+    </header>
+
+    <div class="page-body">
+      <a href="/" class="back-btn">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="15 18 9 12 15 6"/></svg>
+        All Clients
+      </a>
+
+      <!-- Client header -->
+      <div style="display:flex;align-items:center;gap:14px;margin-bottom:20px;flex-wrap:wrap;">
+        <div class="client-avatar" id="clientAvatarLg" style="width:52px;height:52px;font-size:20px;border-radius:12px;">?</div>
+        <div style="flex:1;min-width:0;">
+          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+            <h1 id="clientName" style="font-size:22px;font-weight:800;color:var(--text-bright);">Loading...</h1>
+            <span id="clientStatusBadge" class="client-status-badge badge-active">Active</span>
+          </div>
+          <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-top:4px;">
+            <span id="clientIndustry" style="font-size:12px;color:var(--muted);"></span>
+            <span id="clientIdDisplay" style="font-size:11px;color:var(--muted);font-family:monospace;"></span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Client Info Strip -->
+      <div class="client-info-strip" id="clientInfoStrip">
+        <div class="info-item">
+          <div class="info-label">Website</div>
+          <div class="info-value"><a id="clientWebsite" href="#" target="_blank">—</a></div>
+        </div>
+        <div class="info-item">
+          <div class="info-label">Contact</div>
+          <div class="info-value" id="clientContact">—</div>
+        </div>
+        <div class="info-item">
+          <div class="info-label">Phone</div>
+          <div class="info-value"><a id="clientPhone" href="#">—</a></div>
+        </div>
+        <div class="info-item">
+          <div class="info-label">Monthly Budget</div>
+          <div class="info-value" id="clientBudgetDisplay">—</div>
+        </div>
+        <div class="info-item" style="grid-column:1/-1;">
+          <div class="info-label">Notes</div>
+          <div class="info-value" id="clientNotes" style="white-space:pre-wrap;">—</div>
+        </div>
+      </div>
+
+      <!-- Date Range + Stats -->
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:10px;">
+        <div class="section-title">Performance</div>
+        <div class="range-tabs" id="rangeTabs">
+          <button class="range-tab active" data-range="today">Today</button>
+          <button class="range-tab" data-range="last7">7 Days</button>
+          <button class="range-tab" data-range="last30">30 Days</button>
+          <button class="range-tab" data-range="thismonth">This Month</button>
+        </div>
+      </div>
+
+      <div class="stats-grid" id="clientStatsGrid" style="margin-bottom:28px;">
+        <div class="stat-card"><div class="stat-label">Spend</div><div class="stat-value" id="statSpend">—</div><div class="stat-icon">💸</div></div>
+        <div class="stat-card"><div class="stat-label">Clicks</div><div class="stat-value" id="statClicks">—</div><div class="stat-icon">👆</div></div>
+        <div class="stat-card"><div class="stat-label">Impressions</div><div class="stat-value" id="statImpressions">—</div><div class="stat-icon">👁️</div></div>
+        <div class="stat-card"><div class="stat-label">CTR</div><div class="stat-value" id="statCtr">—</div><div class="stat-icon">📈</div></div>
+        <div class="stat-card"><div class="stat-label">Conversions</div><div class="stat-value" id="statConversions">—</div><div class="stat-icon">🎯</div></div>
+        <div class="stat-card"><div class="stat-label">Spend Today</div><div class="stat-value" id="statSpendToday">—</div><div class="stat-icon">📅</div></div>
+      </div>
+
+      <!-- Campaigns -->
+      <div class="section-header">
+        <div>
+          <div class="section-title">Campaigns</div>
+          <div class="section-sub" id="campaignCount"></div>
+        </div>
+        <div id="apiErrorBadge" class="alert alert-warning" style="display:none;padding:8px 12px;font-size:12px;margin:0;"></div>
+      </div>
+
+      <div class="table-wrap">
+        <table id="campaignsTable">
+          <thead>
+            <tr>
+              <th>Campaign</th>
+              <th>Status</th>
+              <th>Daily Budget</th>
+              <th>Spend</th>
+              <th>Clicks</th>
+              <th>Impressions</th>
+              <th>CTR</th>
+              <th>Conv.</th>
+            </tr>
+          </thead>
+          <tbody id="campaignsBody">
+            <tr><td colspan="8" style="text-align:center;padding:40px;color:var(--muted);">
+              <div class="skeleton" style="height:16px;width:60%;margin:auto;"></div>
+            </td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Bottom Nav -->
+<nav class="bottom-nav">
+  <div class="bottom-nav-inner">
+    <a href="/" class="bottom-nav-item">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+      Dashboard
+    </a>
+    <button class="bottom-nav-item active">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/></svg>
+      Client
+    </button>
+    <a href="/settings" class="bottom-nav-item">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M4.93 4.93a10 10 0 0 0 0 14.14"/></svg>
+      Settings
+    </a>
+  </div>
+</nav>
+
+<!-- Edit Client Modal -->
+<div class="modal-backdrop" id="editClientModal">
+  <div class="modal">
+    <div class="modal-header">
+      <div class="modal-title">Edit Client Info</div>
+      <button class="btn btn-icon btn-ghost" onclick="closeEditClientModal()">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>
+    </div>
+    <div class="modal-body">
+      <div class="form-group">
+        <label class="form-label">Business Name</label>
+        <input type="text" class="form-input" id="editName">
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label class="form-label">Industry / Niche</label>
+          <input type="text" class="form-input" id="editIndustry">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Status</label>
+          <select class="form-select" id="editStatus">
+            <option value="active">Active</option>
+            <option value="paused">Paused</option>
+            <option value="inactive">Inactive</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Website</label>
+        <input type="url" class="form-input" id="editWebsite">
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label class="form-label">Contact Name</label>
+          <input type="text" class="form-input" id="editContact">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Contact Phone</label>
+          <input type="tel" class="form-input" id="editPhone">
+        </div>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Monthly Budget ($)</label>
+        <input type="number" class="form-input" id="editBudget" min="0">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Notes</label>
+        <textarea class="form-textarea" id="editNotes" rows="3"></textarea>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-danger btn-sm" onclick="confirmDeleteClient()">Delete Client</button>
+      <button class="btn btn-secondary" onclick="closeEditClientModal()">Cancel</button>
+      <button class="btn btn-primary" onclick="submitEditClient()">Save Changes</button>
+    </div>
+  </div>
+</div>
+
+<script src="/js/client.js"></script>
+</body>
+</html>

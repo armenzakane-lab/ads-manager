@@ -1,0 +1,4 @@
+node_modules/
+.env
+ads-manager-data.json
+*.json.bak
