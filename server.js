@@ -116,7 +116,8 @@ function getOAuthClient() {
   const clientId = getSetting('google_client_id') || process.env.GOOGLE_CLIENT_ID;
   const clientSecret = getSetting('google_client_secret') || process.env.GOOGLE_CLIENT_SECRET;
   if (!clientId || !clientSecret) return null;
-  return new google.auth.OAuth2(clientId, clientSecret, `http://localhost:${PORT}/auth/callback`);
+  const baseUrl = process.env.APP_URL || `http://localhost:${PORT}`;
+  return new google.auth.OAuth2(clientId, clientSecret, `${baseUrl}/auth/callback`);
 }
 
 function getAdsClient() {
