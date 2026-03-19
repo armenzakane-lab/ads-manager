@@ -12,28 +12,104 @@ const app = express();
 const PORT = process.env.PORT || 5000;
 const DB_PATH = path.join(__dirname, 'ads-manager-data.json');
 
-// ─── SIMPLE JSON DB ───────────────────────────────────────────────────────────
+// ─── STORAGE LAYER (PostgreSQL with JSON fallback) ────────────────────────────
+const USE_PG = !!process.env.DATABASE_URL;
+let pgPool = null;
+
+if (USE_PG) {
+  const { Pool } = require('pg');
+  pgPool = new Pool({
+    connectionString: process.env.DATABASE_URL,
+    ssl: { rejectUnauthorized: false },
+  });
+}
+
+async function initDb() {
+  if (!USE_PG) {
+    if (!fs.existsSync(DB_PATH)) fs.writeFileSync(DB_PATH, JSON.stringify({ settings: {}, tokens: null, clients: [] }, null, 2), 'utf8');
+    return;
+  }
+  await pgPool.query(`CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)`);
+  await pgPool.query(`CREATE TABLE IF NOT EXISTS clients (id TEXT PRIMARY KEY, data JSONB)`);
+  await pgPool.query(`CREATE TABLE IF NOT EXISTS tokens (id TEXT PRIMARY KEY, data JSONB)`);
+}
+
+// ── JSON fallback helpers ──
 function readDb() {
+  try { return JSON.parse(fs.readFileSync(DB_PATH, 'utf8')); }
+  catch { return { settings: {}, tokens: null, clients: [] }; }
+}
+function writeDb(data) { fs.writeFileSync(DB_PATH, JSON.stringify(data, null, 2), 'utf8'); }
+
+// ── getSetting ──
+async function getSetting(key) {
+  if (!USE_PG) return readDb().settings[key] || null;
+  const { rows } = await pgPool.query('SELECT value FROM settings WHERE key=$1', [key]);
+  return rows[0]?.value || null;
+}
+
+// ── setSetting ──
+async function setSetting(key, value) {
+  if (!USE_PG) { const db = readDb(); db.settings[key] = value; writeDb(db); return; }
+  await pgPool.query(
+    'INSERT INTO settings(key,value) VALUES($1,$2) ON CONFLICT(key) DO UPDATE SET value=$2',
+    [key, value]
+  );
+}
+
+// ── getStoredTokens ──
+async function getStoredTokens() {
+  if (!USE_PG) return readDb().tokens;
+  const { rows } = await pgPool.query('SELECT data FROM tokens WHERE id=$1', ['main']);
+  return rows[0]?.data || null;
+}
+
+// ── setStoredTokens ──
+async function setStoredTokens(t) {
+  if (!USE_PG) { const db = readDb(); db.tokens = t; writeDb(db); return; }
+  if (t === null) { await pgPool.query('DELETE FROM tokens WHERE id=$1', ['main']); return; }
+  await pgPool.query(
+    'INSERT INTO tokens(id,data) VALUES($1,$2) ON CONFLICT(id) DO UPDATE SET data=$2',
+    ['main', JSON.stringify(t)]
+  );
+}
+
+// ── getClients ──
+async function getClients() {
+  if (!USE_PG) return readDb().clients || [];
+  const { rows } = await pgPool.query('SELECT data FROM clients ORDER BY data->>\'business_name\'');
+  return rows.map(r => r.data);
+}
+
+// ── saveClients ──
+async function saveClients(clients) {
+  if (!USE_PG) { const db = readDb(); db.clients = clients; writeDb(db); return; }
+  // Upsert all clients, remove ones that are no longer in the list
+  const client = await pgPool.connect();
   try {
-    return JSON.parse(fs.readFileSync(DB_PATH, 'utf8'));
-  } catch {
-    return { settings: {}, tokens: null, clients: [] };
+    await client.query('BEGIN');
+    // Delete clients not in the new list
+    const ids = clients.map(c => String(c.id));
+    if (ids.length > 0) {
+      await client.query(`DELETE FROM clients WHERE id != ALL($1::text[])`, [ids]);
+    } else {
+      await client.query('DELETE FROM clients');
+    }
+    // Upsert each client
+    for (const c of clients) {
+      await client.query(
+        'INSERT INTO clients(id,data) VALUES($1,$2) ON CONFLICT(id) DO UPDATE SET data=$2',
+        [String(c.id), JSON.stringify(c)]
+      );
+    }
+    await client.query('COMMIT');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
   }
 }
-function writeDb(data) {
-  fs.writeFileSync(DB_PATH, JSON.stringify(data, null, 2), 'utf8');
-}
-function getSetting(key) { return readDb().settings[key] || null; }
-function setSetting(key, value) {
-  const db = readDb(); db.settings[key] = value; writeDb(db);
-}
-function getStoredTokens() { return readDb().tokens; }
-function setStoredTokens(t) { const db = readDb(); db.tokens = t; writeDb(db); }
-function getClients() { return readDb().clients || []; }
-function saveClients(clients) { const db = readDb(); db.clients = clients; writeDb(db); }
-
-// Ensure DB file exists
-if (!fs.existsSync(DB_PATH)) writeDb({ settings: {}, tokens: null, clients: [] });
 
 // ─── MIDDLEWARE ───────────────────────────────────────────────────────────────
 app.use(cors());
@@ -112,19 +188,19 @@ app.use((req, res, next) => {
 app.use(express.static(path.join(__dirname, 'client')));
 
 // ─── HELPERS ─────────────────────────────────────────────────────────────────
-function getOAuthClient() {
-  const clientId = getSetting('google_client_id') || process.env.GOOGLE_CLIENT_ID;
-  const clientSecret = getSetting('google_client_secret') || process.env.GOOGLE_CLIENT_SECRET;
+async function getOAuthClient() {
+  const clientId = await getSetting('google_client_id') || process.env.GOOGLE_CLIENT_ID;
+  const clientSecret = await getSetting('google_client_secret') || process.env.GOOGLE_CLIENT_SECRET;
   if (!clientId || !clientSecret) return null;
   const baseUrl = (process.env.APP_URL || `http://localhost:${PORT}`).replace(/\/$/, '');
   return new google.auth.OAuth2(clientId, clientSecret, `${baseUrl}/auth/callback`);
 }
 
-function getAdsClient() {
-  const devToken = getSetting('developer_token') || process.env.GOOGLE_ADS_DEVELOPER_TOKEN;
-  const clientId = getSetting('google_client_id') || process.env.GOOGLE_CLIENT_ID;
-  const clientSecret = getSetting('google_client_secret') || process.env.GOOGLE_CLIENT_SECRET;
-  const tokens = getStoredTokens();
+async function getAdsClient() {
+  const devToken = await getSetting('developer_token') || process.env.GOOGLE_ADS_DEVELOPER_TOKEN;
+  const clientId = await getSetting('google_client_id') || process.env.GOOGLE_CLIENT_ID;
+  const clientSecret = await getSetting('google_client_secret') || process.env.GOOGLE_CLIENT_SECRET;
+  const tokens = await getStoredTokens();
   if (!devToken || !clientId || !clientSecret || !tokens?.refresh_token) return null;
   return new GoogleAdsApi({ client_id: clientId, client_secret: clientSecret, developer_token: devToken });
 }
@@ -142,8 +218,8 @@ function getDateRange(range) {
 }
 
 // ─── AUTH ROUTES ──────────────────────────────────────────────────────────────
-app.get('/auth/google', (req, res) => {
-  const oauth2Client = getOAuthClient();
+app.get('/auth/google', async (req, res) => {
+  const oauth2Client = await getOAuthClient();
   if (!oauth2Client) return res.redirect('/settings.html?error=no_credentials');
   const url = oauth2Client.generateAuthUrl({
     access_type: 'offline',
@@ -161,12 +237,12 @@ app.get('/auth/callback', async (req, res) => {
   const { code, error } = req.query;
   if (error || !code) return res.redirect('/settings.html?error=oauth_denied');
   try {
-    const oauth2Client = getOAuthClient();
+    const oauth2Client = await getOAuthClient();
     const { tokens } = await oauth2Client.getToken(code);
     oauth2Client.setCredentials(tokens);
     const oauth2 = google.oauth2({ version: 'v2', auth: oauth2Client });
     const { data } = await oauth2.userinfo.get();
-    setStoredTokens({ google_email: data.email, ...tokens });
+    await setStoredTokens({ google_email: data.email, ...tokens });
     res.redirect('/?connected=true');
   } catch (err) {
     console.error('OAuth callback error:', err.message);
@@ -174,38 +250,38 @@ app.get('/auth/callback', async (req, res) => {
   }
 });
 
-app.post('/auth/signout', (req, res) => {
-  setStoredTokens(null);
+app.post('/auth/signout', async (req, res) => {
+  await setStoredTokens(null);
   res.json({ success: true });
 });
 
 // ─── SETTINGS ROUTES ─────────────────────────────────────────────────────────
-app.get('/api/settings', (req, res) => {
-  const tokens = getStoredTokens();
+app.get('/api/settings', async (req, res) => {
+  const tokens = await getStoredTokens();
   res.json({
-    google_client_id: getSetting('google_client_id') || process.env.GOOGLE_CLIENT_ID || '',
-    google_client_secret: (getSetting('google_client_secret') || process.env.GOOGLE_CLIENT_SECRET) ? '••••••••' : '',
-    developer_token: (getSetting('developer_token') || process.env.GOOGLE_ADS_DEVELOPER_TOKEN) ? '••••••••' : '',
-    manager_customer_id: getSetting('manager_customer_id') || process.env.GOOGLE_ADS_MANAGER_CUSTOMER_ID || '',
+    google_client_id: await getSetting('google_client_id') || process.env.GOOGLE_CLIENT_ID || '',
+    google_client_secret: (await getSetting('google_client_secret') || process.env.GOOGLE_CLIENT_SECRET) ? '••••••••' : '',
+    developer_token: (await getSetting('developer_token') || process.env.GOOGLE_ADS_DEVELOPER_TOKEN) ? '••••••••' : '',
+    manager_customer_id: await getSetting('manager_customer_id') || process.env.GOOGLE_ADS_MANAGER_CUSTOMER_ID || '',
     connected: !!tokens?.refresh_token,
     google_email: tokens?.google_email || null,
   });
 });
 
-app.post('/api/settings', (req, res) => {
+app.post('/api/settings', async (req, res) => {
   const { google_client_id, google_client_secret, developer_token, manager_customer_id } = req.body;
-  if (google_client_id) setSetting('google_client_id', google_client_id);
-  if (google_client_secret && !google_client_secret.includes('•')) setSetting('google_client_secret', google_client_secret);
-  if (developer_token && !developer_token.includes('•')) setSetting('developer_token', developer_token);
-  if (manager_customer_id) setSetting('manager_customer_id', formatCustomerId(manager_customer_id));
+  if (google_client_id) await setSetting('google_client_id', google_client_id);
+  if (google_client_secret && !google_client_secret.includes('•')) await setSetting('google_client_secret', google_client_secret);
+  if (developer_token && !developer_token.includes('•')) await setSetting('developer_token', developer_token);
+  if (manager_customer_id) await setSetting('manager_customer_id', formatCustomerId(manager_customer_id));
   res.json({ success: true });
 });
 
-app.get('/api/settings/status', (req, res) => {
-  const tokens = getStoredTokens();
-  const hasCredentials = !!(getSetting('google_client_id') || process.env.GOOGLE_CLIENT_ID);
-  const hasDevToken = !!(getSetting('developer_token') || process.env.GOOGLE_ADS_DEVELOPER_TOKEN);
-  const hasManagerId = !!(getSetting('manager_customer_id') || process.env.GOOGLE_ADS_MANAGER_CUSTOMER_ID);
+app.get('/api/settings/status', async (req, res) => {
+  const tokens = await getStoredTokens();
+  const hasCredentials = !!(await getSetting('google_client_id') || process.env.GOOGLE_CLIENT_ID);
+  const hasDevToken = !!(await getSetting('developer_token') || process.env.GOOGLE_ADS_DEVELOPER_TOKEN);
+  const hasManagerId = !!(await getSetting('manager_customer_id') || process.env.GOOGLE_ADS_MANAGER_CUSTOMER_ID);
   res.json({
     connected: !!tokens?.refresh_token,
     google_email: tokens?.google_email || null,
@@ -217,14 +293,15 @@ app.get('/api/settings/status', (req, res) => {
 });
 
 // ─── CLIENT MANAGEMENT ────────────────────────────────────────────────────────
-app.get('/api/clients', (req, res) => {
-  res.json(getClients().sort((a, b) => a.business_name.localeCompare(b.business_name)));
+app.get('/api/clients', async (req, res) => {
+  const clients = await getClients();
+  res.json(clients.sort((a, b) => a.business_name.localeCompare(b.business_name)));
 });
 
-app.post('/api/clients', (req, res) => {
+app.post('/api/clients', async (req, res) => {
   const { customer_id, business_name, website, industry, contact_name, contact_phone, contact_email, notes, monthly_budget } = req.body;
   if (!customer_id || !business_name) return res.status(400).json({ error: 'customer_id and business_name required' });
-  const clients = getClients();
+  const clients = await getClients();
   const clean_id = formatCustomerId(customer_id);
   if (clients.find(c => c.customer_id === clean_id)) return res.status(409).json({ error: 'Client with this Customer ID already exists' });
   const client = {
@@ -243,35 +320,35 @@ app.post('/api/clients', (req, res) => {
     updated_at: new Date().toISOString(),
   };
   clients.push(client);
-  saveClients(clients);
+  await saveClients(clients);
   res.json(client);
 });
 
-app.put('/api/clients/:customerId', (req, res) => {
+app.put('/api/clients/:customerId', async (req, res) => {
   const cid = formatCustomerId(req.params.customerId);
-  const clients = getClients();
+  const clients = await getClients();
   const idx = clients.findIndex(c => c.customer_id === cid);
   if (idx === -1) return res.status(404).json({ error: 'Not found' });
   const updates = req.body;
   clients[idx] = { ...clients[idx], ...updates, customer_id: cid, updated_at: new Date().toISOString() };
   if (updates.monthly_budget !== undefined) clients[idx].monthly_budget = parseFloat(updates.monthly_budget) || 0;
-  saveClients(clients);
+  await saveClients(clients);
   res.json(clients[idx]);
 });
 
-app.delete('/api/clients/:customerId', (req, res) => {
+app.delete('/api/clients/:customerId', async (req, res) => {
   const cid = formatCustomerId(req.params.customerId);
-  const clients = getClients().filter(c => c.customer_id !== cid);
-  saveClients(clients);
+  const clients = (await getClients()).filter(c => c.customer_id !== cid);
+  await saveClients(clients);
   res.json({ success: true });
 });
 
 // ─── GOOGLE ADS DATA ──────────────────────────────────────────────────────────
 async function getCustomerWithTokens(customerId) {
-  const adsClient = getAdsClient();
+  const adsClient = await getAdsClient();
   if (!adsClient) throw new Error('Google Ads not configured. Please complete setup in Settings.');
-  const tokens = getStoredTokens();
-  const managerId = getSetting('manager_customer_id') || process.env.GOOGLE_ADS_MANAGER_CUSTOMER_ID;
+  const tokens = await getStoredTokens();
+  const managerId = await getSetting('manager_customer_id') || process.env.GOOGLE_ADS_MANAGER_CUSTOMER_ID;
   return adsClient.Customer({
     customer_id: formatCustomerId(customerId),
     login_customer_id: managerId ? formatCustomerId(managerId) : undefined,
@@ -280,8 +357,8 @@ async function getCustomerWithTokens(customerId) {
 }
 
 app.get('/api/accounts', async (req, res) => {
-  const clients = getClients().sort((a, b) => a.business_name.localeCompare(b.business_name));
-  const tokens = getStoredTokens();
+  const clients = (await getClients()).sort((a, b) => a.business_name.localeCompare(b.business_name));
+  const tokens = await getStoredTokens();
   if (!tokens?.refresh_token) return res.json({ clients, connected: false });
 
   const statsPromises = clients.map(async (client) => {
@@ -413,16 +490,23 @@ function getLocalIP() {
   return 'localhost';
 }
 
-app.listen(PORT, '0.0.0.0', () => {
-  const ip = getLocalIP();
-  const ipLine = `║  Network:  http://${ip}:${PORT}`;
-  console.log('\n╔════════════════════════════════════════════╗');
-  console.log('║          ADS MANAGER - RUNNING             ║');
-  console.log('╠════════════════════════════════════════════╣');
-  console.log(`║  Local:    http://localhost:${PORT}           ║`);
-  console.log(ipLine.padEnd(46) + '║');
-  console.log('╠════════════════════════════════════════════╣');
-  console.log('║  Phone: connect to the Network URL above   ║');
-  console.log('║  Anywhere: run  ngrok http 5000            ║');
-  console.log('╚════════════════════════════════════════════╝\n');
+initDb().then(() => {
+  app.listen(PORT, '0.0.0.0', () => {
+    const ip = getLocalIP();
+    const ipLine = `║  Network:  http://${ip}:${PORT}`;
+    console.log('\n╔════════════════════════════════════════════╗');
+    console.log('║          ADS MANAGER - RUNNING             ║');
+    console.log('╠════════════════════════════════════════════╣');
+    console.log(`║  Local:    http://localhost:${PORT}           ║`);
+    console.log(ipLine.padEnd(46) + '║');
+    console.log('╠════════════════════════════════════════════╣');
+    console.log('║  Phone: connect to the Network URL above   ║');
+    console.log('║  Anywhere: run  ngrok http 5000            ║');
+    console.log('╚════════════════════════════════════════════╝\n');
+    if (USE_PG) console.log('  Storage: PostgreSQL (DATABASE_URL)\n');
+    else console.log('  Storage: Local JSON file (no DATABASE_URL set)\n');
+  });
+}).catch(err => {
+  console.error('Failed to initialize database:', err);
+  process.exit(1);
 });
