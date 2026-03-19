@@ -45,6 +45,70 @@ app.use(session({
   saveUninitialized: false,
   cookie: { secure: false, maxAge: 7 * 24 * 60 * 60 * 1000 }
 }));
+// ─── PASSWORD PROTECTION ─────────────────────────────────────────────────────
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'ads-manager-2026';
+
+app.get('/login', (req, res) => {
+  res.send(`<!DOCTYPE html>
+<html>
+<head>
+  <title>Ads Manager — Login</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    *{box-sizing:border-box;margin:0;padding:0}
+    body{background:#04060d;color:#c8d8f0;font-family:'Inter',sans-serif;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px}
+    .card{background:rgba(13,20,36,0.9);border:1px solid rgba(255,255,255,0.07);border-radius:20px;padding:48px 40px;width:100%;max-width:400px;box-shadow:0 24px 64px rgba(0,0,0,0.5)}
+    .logo{font-size:22px;font-weight:800;background:linear-gradient(135deg,#3b82f6,#a78bfa);-webkit-background-clip:text;-webkit-text-fill-color:transparent;margin-bottom:8px}
+    .sub{font-size:14px;color:#5a7a9a;margin-bottom:36px}
+    label{font-size:12px;font-weight:600;color:#5a7a9a;text-transform:uppercase;letter-spacing:.6px;display:block;margin-bottom:8px}
+    input{width:100%;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.1);border-radius:10px;padding:14px 16px;font-size:16px;color:#fff;font-family:'Inter',sans-serif;outline:none;transition:.15s}
+    input:focus{border-color:#3b82f6;box-shadow:0 0 0 3px rgba(59,130,246,0.15)}
+    button{width:100%;margin-top:24px;background:linear-gradient(135deg,#3b82f6,#6366f1);color:#fff;border:none;border-radius:12px;padding:16px;font-size:15px;font-weight:700;cursor:pointer;transition:.15s;font-family:'Inter',sans-serif}
+    button:hover{transform:translateY(-1px);box-shadow:0 8px 24px rgba(59,130,246,0.35)}
+    .error{color:#f43f5e;font-size:13px;margin-top:16px;text-align:center}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="logo">Ads Manager</div>
+    <div class="sub">Sign in to your dashboard</div>
+    <form method="POST" action="/login">
+      <label>Password</label>
+      <input type="password" name="password" placeholder="Enter password" autofocus>
+      ${req.query.error ? '<div class="error">Incorrect password. Try again.</div>' : ''}
+      <button type="submit">Sign In</button>
+    </form>
+  </div>
+</body>
+</html>`);
+});
+
+app.post('/login', (req, res) => {
+  if (req.body.password === ADMIN_PASSWORD) {
+    req.session.authenticated = true;
+    res.redirect('/');
+  } else {
+    res.redirect('/login?error=1');
+  }
+});
+
+app.get('/logout', (req, res) => {
+  req.session.destroy();
+  res.redirect('/login');
+});
+
+function requireAuth(req, res, next) {
+  if (req.session.authenticated) return next();
+  res.redirect('/login');
+}
+
+app.use((req, res, next) => {
+  if (req.path === '/login' || req.path.startsWith('/auth/')) return next();
+  if (!req.session.authenticated) return res.redirect('/login');
+  next();
+});
+
 app.use(express.static(path.join(__dirname, 'client')));
 
 // ─── HELPERS ─────────────────────────────────────────────────────────────────
